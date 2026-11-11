@@ -50,7 +50,7 @@ function load(): void {
   store.close();
   console.log(`loaded ${turns.length} demo turns (real recorded answers, tagged "demo seed"):`);
   for (const t of turns) console.log(`  ${t.at.slice(0, 10)}  ${t.userText.slice(0, 80)}`);
-  const first = turns[0]?.at.slice(0, 10);
+  const first = turns[0] ? new Date(turns[0].at).toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: turns[0].tz }) : "";
   console.log(`Try: "What did I ask you on ${first}? Is your answer still correct today?"`);
 }
 
