@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>minimi</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1d1d1f; --muted:#6e6e73; --line:#e6e3dc; --me:#ecebe6; --accent:#3b5bdb; --seed:#b06d00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#ececec; --muted:#9a9a9f; --line:#2a2a2a; --me:#232323; --accent:#8ea2ff; --seed:#e0a040; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:16px 16px 120px; }
+  header { display:flex; align-items:baseline; gap:12px; padding:8px 0 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; } header span { color:var(--muted); font-size:13px; }
+  .day { text-align:center; color:var(--muted); font-size:12px; margin:24px 0 8px; }
+  .msg { margin:12px 0; } .me { background:var(--me); padding:10px 14px; border-radius:14px; margin-left:20%; white-space:pre-wrap; }
+  .bot { padding:2px 2px; } .status { color:var(--muted); font-size:13px; font-style:italic; }
+  .meta { color:var(--muted); font-size:12px; margin-top:6px; }
+  .seed { color:var(--seed); font-size:11px; border:1px solid var(--seed); border-radius:6px; padding:0 5px; margin-left:6px; }
+  .sources { font-size:13px; margin-top:6px; padding-left:18px; color:var(--muted); } .sources a { color:var(--accent); }
+  sup a { color:var(--accent); text-decoration:none; font-size:11px; }
+  form { position:fixed; bottom:0; left:0; right:0; background:var(--bg); border-top:1px solid var(--line); padding:12px 16px; }
+  form div { max-width:760px; margin:0 auto; display:flex; gap:8px; }
+  textarea { flex:1; resize:none; font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  button { font:inherit; border:0; border-radius:12px; padding:0 18px; background:var(--accent); color:#fff; cursor:pointer; } button:disabled { opacity:.5; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>minimi</h1><span>one tool: web search · remembers what you asked, and when</span></header>
+  <div id="log"></div>
+</main>
+<form id="f"><div><textarea id="q" rows="1" placeholder="Ask anything…" autofocus></textarea><button id="send">Send</button></div></form>
+<script>
+const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const log = document.getElementById("log"), q = document.getElementById("q"), send = document.getElementById("send");
+let lastDay = "";
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const dayOf = (iso) => new Date(iso).toLocaleDateString(undefined, { timeZone: tz, weekday:"long", day:"numeric", month:"long", year:"numeric" });
+function divider(iso) { const d = dayOf(iso); if (d !== lastDay) { lastDay = d; log.insertAdjacentHTML("beforeend", `<div class="day">${esc(d)}</div>`); } }
+function render(md, sources) {
+  const byN = Object.fromEntries((sources || []).map((s) => [s.n, s]));
+  return esc(md)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^- (.*)$/gm, "• $1")
+    .replace(/\[(\d+)\]/g, (m, n) => byN[n] ? `<sup><a href="${esc(byN[n].url)}" target="_blank" rel="noopener">${n}</a></sup>` : m)
+    .replace(/\n/g, "<br>");
+}
+function host(u) { try { return new URL(u).hostname; } catch { return u; } }
+function sourceList(sources) {
+  if (!sources?.length) return "";
+  return `<ol class="sources">${sources.map((s) => `<li value="${s.n}"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(host(s.url))}</a> · ${esc(s.title)}${s.publishedDate ? ` · ${s.publishedDate}` : ""}</li>`).join("")}</ol>`;
+}
+function addMe(text, iso, seed) {
+  divider(iso);
+  log.insertAdjacentHTML("beforeend", `<div class="msg me">${esc(text)}${seed ? '<span class="seed">demo seed</span>' : ""}</div>`);
+}
+function addBot() { const el = document.createElement("div"); el.className = "msg bot"; log.appendChild(el); return el; }
+
+async function loadHistory() {
+  const turns = await (await fetch("/api/turns")).json();
+  for (const t of turns) {
+    addMe(t.userText, t.at, t.seed);
+    let n = 0;
+    const all = t.searches.flatMap((s) => s.results).map((r) => ({ n: ++n, ...r }));
+    const cited = all.filter((s) => t.answerText.includes(`[${s.n}]`));
+    addBot().innerHTML = render(t.answerText, cited) + sourceList(cited);
+  }
+  scrollTo(0, document.body.scrollHeight);
+}
+
+async function ask(text) {
+  addMe(text, new Date().toISOString(), false);
+  const bot = addBot(); const status = document.createElement("div"); status.className = "status"; bot.appendChild(status);
+  const body = document.createElement("div"); bot.appendChild(body);
+  let answer = "", sources = [];
+  send.disabled = true;
+  try {
+    const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: text, tz }) });
+    if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += value; let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const data = chunk.split("\n").find((l) => l.startsWith("data:"));
+        if (!data) continue;
+        const e = JSON.parse(data.slice(5));
+        if (e.type === "status") status.textContent = e.text;
+        if (e.type === "text") { status.textContent = ""; answer += e.text; body.innerHTML = render(answer, sources); }
+        if (e.type === "sources") { sources = e.sources; body.innerHTML = render(answer, sources) + sourceList(sources); }
+        if (e.type === "done") bot.insertAdjacentHTML("beforeend", `<div class="meta">first word ${e.ttftMs != null ? (e.ttftMs/1000).toFixed(1) + "s" : "n/a"} · done ${(e.totalMs/1000).toFixed(1)}s · ${e.searches} search${e.searches === 1 ? "" : "es"}</div>`);
+        if (e.type === "error") status.textContent = "⚠ " + e.message;
+      }
+      scrollTo(0, document.body.scrollHeight);
+    }
+  } catch (err) { status.textContent = "⚠ " + err.message; }
+  send.disabled = false; q.focus();
+}
+
+document.getElementById("f").addEventListener("submit", (ev) => { ev.preventDefault(); const t = q.value.trim(); if (t) { q.value = ""; ask(t); } });
+q.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); document.getElementById("f").requestSubmit(); } });
+loadHistory();
+</script>
+</body>
+</html>
