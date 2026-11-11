@@ -48,11 +48,13 @@ test("history returns recent turns oldest-first and they are not repeated as rel
   assert.doesNotMatch(block, /related earlier turns/);
 });
 
-test("the tool follows Exa's guidance: query + required objective with the recommended wording", () => {
+test("the tool follows Exa's guidance: every search has a query and a required objective with the recommended wording", () => {
   const p = WEB_SEARCH_TOOL.function.parameters;
-  assert.deepEqual(p.required, ["query", "objective"]);
+  assert.deepEqual(p.required, ["searches"]);
+  const item = p.properties.searches.items;
+  assert.deepEqual(item.required, ["query", "objective"]);
   assert.equal(
-    p.properties.objective.description,
+    item.properties.objective.description,
     "Goal for this search turn; say which documents should rank first, which should be excluded, and what specific facts or figures to pull from them.",
   );
   assert.match(WEB_SEARCH_TOOL.function.description, /Search the live web/);

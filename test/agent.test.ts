@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.ts";
-import { runTurn, type AgentEvent } from "../src/agent.ts";
+import { makeCiteNormalizer, runTurn, type AgentEvent } from "../src/agent.ts";
 import type { ModelRequest, StreamFn } from "../src/llm.ts";
 import type { SearchFn } from "../src/search.ts";
 
-type Step = { text?: string; tools?: { id: string; input: unknown }[] };
+type One = { query: string; objective?: string; since?: string | null };
+type Step = { text?: string; calls?: { id: string; searches?: One[]; raw?: string }[] };
 
 function fakeModel(script: Step[]) {
   const calls: ModelRequest[] = [];
@@ -14,9 +15,9 @@ function fakeModel(script: Step[]) {
     calls.push({ allowTools: req.allowTools, messages: structuredClone(req.messages) });
     const step = script[i++];
     if (step.text) onText(step.text);
-    const toolCalls = (step.tools ?? []).map((t) => ({
-      id: t.id, type: "function" as const,
-      function: { name: "web_search", arguments: typeof t.input === "string" ? t.input : JSON.stringify(t.input) },
+    const toolCalls = (step.calls ?? []).map((c) => ({
+      id: c.id, type: "function" as const,
+      function: { name: "web_search", arguments: c.raw ?? JSON.stringify({ searches: (c.searches ?? []).map((s) => ({ objective: "o", ...s })) }) },
     }));
     return { text: step.text ?? "", toolCalls, finishReason: toolCalls.length ? "tool_calls" : "stop" };
   };
@@ -50,45 +51,57 @@ test("answer without tools: streams text, persists the turn", async () => {
   assert.match(last.content, /^<context>[\s\S]*<\/context>\n\nthanks$/);
 });
 
-test("parallel searches pass objective, get global [n] numbering; only cited sources are emitted", async () => {
+test("one batched call runs its searches in parallel, passes objective, numbers sources globally", async () => {
   const m = fakeModel([
-    { tools: [
-      { id: "a", input: { query: "neon pricing", objective: "find plan prices", since: null } },
-      { id: "b", input: { query: "supabase pricing", objective: "find plan prices", since: "2026-11-03" } },
-    ] },
+    { calls: [{ id: "a", searches: [
+      { query: "neon pricing", objective: "find plan prices" },
+      { query: "supabase pricing", objective: "find plan prices" },
+    ] }] },
     { text: "Neon is $19 [1]; Supabase is $25 [6]." },
   ]);
   const s = fakeSearch();
   const events: AgentEvent[] = [];
   const turn = await runTurn({ text: "neon vs supabase price", tz: "UTC" }, deps(m.stream, s.fn), (e) => events.push(e));
-  assert.deepEqual(s.calls.map((c) => [c.query, c.objective, c.since]), [["neon pricing", "find plan prices", null], ["supabase pricing", "find plan prices", null]]); // since dropped: empty memory
+  assert.deepEqual(s.calls.map((c) => [c.query, c.objective]), [["neon pricing", "find plan prices"], ["supabase pricing", "find plan prices"]]);
   const toolMsgs = m.calls[1].messages.filter((x) => x.role === "tool") as { tool_call_id: string; content: string }[];
-  assert.deepEqual(toolMsgs.map((x) => x.tool_call_id), ["a", "b"]);
-  assert.match(toolMsgs[0].content, /^\[1\] neon 0/);
-  assert.match(toolMsgs[1].content, /^\[6\] supabase 0/);
+  assert.equal(toolMsgs.length, 1);
+  assert.equal(toolMsgs[0].tool_call_id, "a");
+  assert.match(toolMsgs[0].content, /## search: neon pricing\n\[1\] neon 0/);
+  assert.match(toolMsgs[0].content, /## search: supabase pricing\n\[6\] supabase 0/);
   const assistant = m.calls[1].messages.find((x) => x.role === "assistant" && "tool_calls" in x) as any;
-  assert.equal(assistant.tool_calls.length, 2);
+  assert.equal(assistant.tool_calls.length, 1);
   assert.equal(turn.searches.length, 2);
   const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
   assert.deepEqual(sources.sources.map((x) => x.n), [1, 6]);
   assert.equal(events.filter((e) => e.type === "status").length, 2);
 });
 
+test("separate parallel tool calls in one step also work and answer each call id", async () => {
+  const m = fakeModel([
+    { calls: [{ id: "a", searches: [{ query: "alpha one" }] }, { id: "b", searches: [{ query: "beta two" }] }] },
+    { text: "done [1] [6]" },
+  ]);
+  await runTurn({ text: "x", tz: "UTC" }, deps(m.stream, fakeSearch().fn), () => {});
+  const toolMsgs = m.calls[1].messages.filter((x) => x.role === "tool") as { tool_call_id: string; content: string }[];
+  assert.deepEqual(toolMsgs.map((x) => x.tool_call_id), ["a", "b"]);
+  assert.match(toolMsgs[1].content, /\[6\] beta 0/);
+});
+
 test("invalid tool input returns an error message and does not search", async () => {
-  const m = fakeModel([{ tools: [{ id: "a", input: { query: "", since: "yesterday" } }, { id: "b", input: "not json" }] }, { text: "Sorry." }]);
+  const m = fakeModel([{ calls: [{ id: "a", raw: JSON.stringify({ searches: [{ query: "" }] }) }, { id: "b", raw: "not json" }, { id: "c", raw: JSON.stringify({ query: "old shape" }) }] }, { text: "Sorry." }]);
   const s = fakeSearch();
   await runTurn({ text: "x", tz: "UTC" }, deps(m.stream, s.fn), () => {});
   assert.equal(s.calls.length, 0);
   const tools = m.calls[1].messages.filter((x) => x.role === "tool") as { content: string }[];
-  assert.equal(tools.length, 2);
+  assert.equal(tools.length, 3);
   assert.match(tools[0].content, /^Error: invalid arguments/);
 });
 
-test("more than 3 parallel searches ask for fewer results each", async () => {
-  const tools = Array.from({ length: 5 }, (_, k) => ({ id: `t${k}`, input: { query: `crm${k} pricing`, objective: "o" } }));
-  const m = fakeModel([{ tools }, { text: "done" }]);
+test("more than 3 searches in a step ask for fewer results each", async () => {
+  const m = fakeModel([{ calls: [{ id: "t", searches: Array.from({ length: 5 }, (_, k) => ({ query: `crm${k} pricing` })) }] }, { text: "done" }]);
   const s = fakeSearch();
   await runTurn({ text: "compare 5 crms", tz: "UTC" }, deps(m.stream, s.fn), () => {});
+  assert.equal(s.calls.length, 5);
   assert.ok(s.calls.every((c) => c.numResults === 3));
 });
 
@@ -106,7 +119,7 @@ test("'at' override sets the turn time; history is sent with local timestamps", 
 });
 
 test("last step disables tools so the loop always ends with an answer", async () => {
-  const loop = Array.from({ length: 3 }, (_, k) => ({ tools: [{ id: `t${k}`, input: { query: `q${k}`, objective: "o" } }] }));
+  const loop = Array.from({ length: 3 }, (_, k) => ({ calls: [{ id: `t${k}`, searches: [{ query: `q${k}` }] }] }));
   const m = fakeModel([...loop, { text: "Here's what I found [1]." }]);
   const turn = await runTurn({ text: "x", tz: "UTC" }, deps(m.stream, fakeSearch().fn), () => {});
   assert.equal(m.calls.length, 4);
@@ -122,17 +135,20 @@ test("an empty model answer becomes a polite fallback, still persisted", async (
   assert.equal(d.store.count(), 1);
 });
 
-import { makeCiteNormalizer } from "../src/agent.ts";
-
 test("citation normalizer rewrites 【n†…】 to [n], even when split across chunks", () => {
   const n = makeCiteNormalizer();
   const out = ["Node is 26 ", "【1†L1", "-L2】 and ", "【2†L3】【3】.", " tail 【9"].map((d) => n.push(d)).join("") + n.flush();
   assert.equal(out, "Node is 26 [1] and [2][3]. tail 【9");
 });
 
+test("normalizer swaps narrow no-break spaces and non-breaking hyphens for plain ones", () => {
+  const n = makeCiteNormalizer();
+  assert.equal(n.push("as of Nov 3 pay‑as‑you‑go plan"), "as of Nov 3 pay-as-you-go plan");
+});
+
 test("the agent stores and emits normalized citations and detects the cited source", async () => {
   const m = fakeModel([
-    { tools: [{ id: "a", input: { query: "node release", objective: "o" } }] },
+    { calls: [{ id: "a", searches: [{ query: "node release" }] }] },
     { text: "Node 26 is current 【1†L1-L2】." },
   ]);
   const events: AgentEvent[] = [];
@@ -142,14 +158,9 @@ test("the agent stores and emits normalized citations and detects the cited sour
   assert.deepEqual(sources.sources.map((x) => x.n), [1]);
 });
 
-test("normalizer swaps narrow no-break spaces and non-breaking hyphens for plain ones", () => {
-  const n = makeCiteNormalizer();
-  assert.equal(n.push("as of\u202fNov\u202f3 pay\u2011as\u2011you\u2011go\u00a0plan"), "as of Nov 3 pay-as-you-go plan");
-});
-
 test("a 'since' the model invented is dropped; one at or after a visible past turn is kept", async () => {
   // empty memory: any since is a guess
-  const m1 = fakeModel([{ tools: [{ id: "a", input: { query: "neon pricing", objective: "o", since: "2024-01-01" } }] }, { text: "ok" }]);
+  const m1 = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing", since: "2024-01-01" }] }] }, { text: "ok" }]);
   const s1 = fakeSearch();
   await runTurn({ text: "neon pricing?", tz: "UTC" }, deps(m1.stream, s1.fn), () => {});
   assert.equal(s1.calls[0].since, null);
@@ -157,10 +168,10 @@ test("a 'since' the model invented is dropped; one at or after a visible past tu
   // memory has a turn on 3 Nov: since 2026-11-03 is a legitimate recheck window, 2024 still isn't
   const store = new Store(":memory:");
   await runTurn({ text: "neon pricing?", tz: "UTC", at: new Date("2026-11-03T05:00:00Z") }, deps(fakeModel([{ text: "$19" }]).stream, fakeSearch().fn, store), () => {});
-  const m2 = fakeModel([{ tools: [
-    { id: "a", input: { query: "neon news", objective: "o", since: "2026-11-03" } },
-    { id: "b", input: { query: "neon old", objective: "o", since: "2024-01-01" } },
-  ] }, { text: "ok" }]);
+  const m2 = fakeModel([{ calls: [{ id: "a", searches: [
+    { query: "neon news", since: "2026-11-03" },
+    { query: "neon old", since: "2024-01-01" },
+  ] }] }, { text: "ok" }]);
   const s2 = fakeSearch();
   await runTurn({ text: "what did I ask on 3 November? still correct?", tz: "UTC" }, deps(m2.stream, s2.fn, store), () => {});
   assert.deepEqual(s2.calls.map((c) => c.since), ["2026-11-03", null]);

@@ -26,11 +26,13 @@ export interface AgentDeps {
 
 export interface TurnInput { text: string; tz: string; at?: Date }
 
-const SearchInput = z.object({
+const OneSearch = z.object({
   query: z.string().min(1),
   objective: z.string().nullish().transform((v) => v ?? null),
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().transform((v) => v ?? null),
 });
+/** web_search takes a batch so one model step can fan out to several searches that run in parallel. */
+const SearchInput = z.object({ searches: z.array(OneSearch).min(1).max(5) });
 
 /**
  * gpt-oss was trained to cite as 【1†L1-L2】 and likes narrow no-break spaces and non-breaking hyphens.
@@ -45,7 +47,7 @@ export function makeCiteNormalizer(): { push(delta: string): string; flush(): st
       pending = "";
       const open = s.lastIndexOf("【");
       if (open >= 0 && s.indexOf("】", open) < 0) { pending = s.slice(open); s = s.slice(0, open); }
-      return s.replace(/【(\d+)[^】]*】/g, "[$1]").replace(/[\u202f\u00a0]/g, " ").replace(/\u2011/g, "-");
+      return s.replace(/【(\d+)[^】]*】/g, "[$1]").replace(/[  ]/g, " ").replace(/‑/g, "-");
     },
     flush() { const p = pending; pending = ""; return p; },
   };
@@ -83,6 +85,10 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   };
   const onText = (delta: string): void => write(norm.push(delta));
 
+  // `since` is only meaningful for rechecking something the model can see in memory. A date earlier than
+  // every visible past turn (or any date at all in an empty memory) is the model guessing: drop it.
+  const sinceOk = (d: string | null): string | null => (d && pastDates.length && d >= pastDates[0] ? d : null);
+
   for (let step = 0; step < MAX_STEPS; step++) {
     const res = await deps.stream({ messages, allowTools: step < MAX_STEPS - 1 }, onText);
     write(norm.flush());
@@ -94,26 +100,28 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
       try { raw = JSON.parse(tc.function.arguments || "{}"); } catch { /* handled by the schema check below */ }
       return { tc, args: tc.function.name === "web_search" ? SearchInput.safeParse(raw) : null };
     });
-    for (const { args } of parsed) if (args?.success) emit({ type: "status", text: `Searching: ${args.data.query}` });
+    const planned = parsed.flatMap(({ args }) => (args?.success ? args.data.searches : []));
+    for (const q of planned) emit({ type: "status", text: `Searching: ${q.query}` });
 
-    // `since` is only meaningful for rechecking something the model can see in memory. A date earlier than
-    // every visible past turn (or any date at all in an empty memory) is the model guessing: drop it.
-    const sinceOk = (d: string | null): string | null => (d && pastDates.length && d >= pastDates[0] ? d : null);
-    const numResults = parsed.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
-    const records = await Promise.all(parsed.map(({ args }) =>
-      args?.success ? deps.search({ query: args.data.query, objective: args.data.objective, since: sinceOk(args.data.since), numResults }) : Promise.resolve(null)));
+    const numResults = planned.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
+    const records = await Promise.all(planned.map((q) =>
+      deps.search({ query: q.query, objective: q.objective, since: sinceOk(q.since), numResults })));
 
-    parsed.forEach(({ tc, args }, i) => {
-      const rec = records[i];
-      if (!args?.success || !rec) {
-        messages.push({ role: "tool", tool_call_id: tc.id, content: `Error: invalid arguments for ${tc.function.name}. Use web_search with a non-empty query and since as YYYY-MM-DD or omitted.` });
-        return;
+    let next = 0;
+    for (const { tc, args } of parsed) {
+      if (!args?.success) {
+        messages.push({ role: "tool", tool_call_id: tc.id, content: 'Error: invalid arguments. Call web_search with {"searches": [{"query": ..., "objective": ..., "since": optional YYYY-MM-DD}]} (1-5 searches).' });
+        continue;
       }
-      const firstIndex = sources.length + 1;
-      rec.results.forEach((r, k) => sources.push({ n: firstIndex + k, url: r.url, title: r.title, publishedDate: r.publishedDate }));
-      searches.push(rec);
-      messages.push({ role: "tool", tool_call_id: tc.id, content: formatForModel(rec, firstIndex) });
-    });
+      const parts = args.data.searches.map(() => {
+        const rec = records[next++];
+        const firstIndex = sources.length + 1;
+        rec.results.forEach((r, k) => sources.push({ n: firstIndex + k, url: r.url, title: r.title, publishedDate: r.publishedDate }));
+        searches.push(rec);
+        return `## search: ${rec.query}\n${formatForModel(rec, firstIndex)}`;
+      });
+      messages.push({ role: "tool", tool_call_id: tc.id, content: parts.join("\n\n") });
+    }
     if (answer && !answer.endsWith("\n")) needsBreak = true;
   }
 

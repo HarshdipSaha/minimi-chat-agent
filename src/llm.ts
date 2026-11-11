@@ -48,6 +48,8 @@ export function makeGroqStream(opts: {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   maxWaitMs?: number;
+  /** Optional per-call timing hook (set DEBUG_TIMING=1 in the app to print these). */
+  onMetrics?: (m: { slot: number; ttfbMs: number; firstTextMs: number | null; totalMs: number; finishReason: string }) => void;
 }): StreamFn {
   const fetchFn = opts.fetchFn ?? fetch;
   const ring = new KeyRing(opts.keys, opts.now);
@@ -56,6 +58,9 @@ export function makeGroqStream(opts: {
   const isGptOss = opts.model.startsWith("openai/gpt-oss");
 
   async function once(key: string, req: ModelRequest, onText: (d: string) => void): Promise<ModelResult> {
+    const t0 = performance.now();
+    let ttfbMs = 0;
+    let firstTextMs: number | null = null;
     const body: Record<string, unknown> = {
       model: opts.model,
       stream: true,
@@ -78,6 +83,7 @@ export function makeGroqStream(opts: {
       ring.cool(key, 2_000);
       throw new Retryable(`network error: ${err instanceof Error ? err.message : String(err)}`);
     }
+    ttfbMs = Math.round(performance.now() - t0);
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 300);
       if (res.status === 429) {
@@ -104,7 +110,11 @@ export function makeGroqStream(opts: {
       const choice = (JSON.parse(data) as { choices?: Array<{ delta?: any; finish_reason?: string | null }> }).choices?.[0];
       if (!choice) return;
       const d = choice.delta ?? {};
-      if (typeof d.content === "string" && d.content) { text += d.content; onText(d.content); }
+      if (typeof d.content === "string" && d.content) {
+        firstTextMs ??= Math.round(performance.now() - t0);
+        text += d.content;
+        onText(d.content);
+      }
       for (const tc of d.tool_calls ?? []) {
         const cur = calls.get(tc.index ?? 0) ?? { id: "", type: "function" as const, function: { name: "", arguments: "" } };
         if (tc.id) cur.id = tc.id;
@@ -125,6 +135,7 @@ export function makeGroqStream(opts: {
       if (!text && !calls.size) throw new Retryable(`stream error: ${err instanceof Error ? err.message : String(err)}`);
       throw err; // partial output was already shown: don't silently restart
     }
+    opts.onMetrics?.({ slot: opts.keys.indexOf(key) + 1, ttfbMs, firstTextMs, totalMs: Math.round(performance.now() - t0), finishReason });
     return { text, toolCalls: [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c), finishReason };
   }
 

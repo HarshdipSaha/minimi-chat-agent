@@ -5,7 +5,7 @@ Every user turn starts with a <context> block written by the app, not the user. 
 When to search
 - Search for anything that can change after your training: prices, plans, releases, versions, news, who holds a role, scores, schedules. Never state such facts from memory.
 - Don't search for chit-chat, writing help, maths, or questions about this conversation. Answer those from the context and history.
-- When comparing several things, issue one search per item in the same turn so they run in parallel. Usually 1-3 searches; at most 5.
+- Make ONE web_search call per step and put all the searches you need in its searches array (one per item when comparing; they run in parallel). Usually 1-3 searches, at most 5. Search again only if the results were insufficient.
 - Put what to retrieve in query. Put the goal in objective: which pages should rank first, and which figures or facts to pull.
 
 Memory
@@ -25,7 +25,7 @@ Answer style
 - When an answer relies on search results, end with one short line: "As of <date from context>."
 - Ask a clarifying question only when you can't give a useful answer without it.`;
 
-/** Tool schema in the OpenAI function format that Groq speaks. `objective` is required, with Exa's recommended wording. */
+/** Tool schema in the OpenAI function format that Groq speaks. Each search has a required `objective`, with Exa's recommended wording. */
 export const WEB_SEARCH_TOOL = {
   type: "function" as const,
   function: {
@@ -33,18 +33,30 @@ export const WEB_SEARCH_TOOL = {
     description:
       "Search the live web and return the most relevant URLs with their published dates and key passages. " +
       "Use for fresh information beyond the model's training data. " +
-      "Set `since` (YYYY-MM-DD) only to get pages published on or after that date, e.g. to find what changed since a past answer.",
+      "Takes 1-5 searches that run in parallel: put every search you need for this step in one call (e.g. one per product being compared). " +
+      "Set `since` (YYYY-MM-DD) only to get pages published on or after that date when rechecking a past answer from memory.",
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "What to retrieve. Specific: include product names and the year when it matters." },
-        objective: {
-          type: "string",
-          description: "Goal for this search turn; say which documents should rank first, which should be excluded, and what specific facts or figures to pull from them.",
+        searches: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "What to retrieve. Specific: include product names and the year when it matters." },
+              objective: {
+                type: "string",
+                description: "Goal for this search turn; say which documents should rank first, which should be excluded, and what specific facts or figures to pull from them.",
+              },
+              since: { type: "string", description: "Optional. YYYY-MM-DD." },
+            },
+            required: ["query", "objective"],
+          },
         },
-        since: { type: "string", description: "Optional. YYYY-MM-DD. Only when rechecking a past answer from memory." },
       },
-      required: ["query", "objective"],
+      required: ["searches"],
     },
   },
 };
