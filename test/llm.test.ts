@@ -131,3 +131,9 @@ test("when every key is limited on the primary model, the fallback model takes o
   await stream(req, () => {});
   assert.deepEqual(calls.slice(3), ["small"]); // primary keys are still cooling: no wasted attempts
 });
+
+test("forceTool sends tool_choice required", async () => {
+  const f = fakeFetch([ok(TEXT)]);
+  await makeGroqStream({ ...base, keys: ["k1"], fetchFn: f.fn })({ ...req, forceTool: true }, () => {});
+  assert.equal(f.calls[0].body.tool_choice, "required");
+});

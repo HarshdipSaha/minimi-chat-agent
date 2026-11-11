@@ -7,7 +7,12 @@ export type ChatMessage =
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
-export interface ModelRequest { messages: ChatMessage[]; allowTools: boolean }
+export interface ModelRequest {
+  messages: ChatMessage[];
+  allowTools: boolean;
+  /** The model must call web_search (used for rechecks, which must never be answered from memory alone). */
+  forceTool?: boolean;
+}
 export interface ModelResult { text: string; toolCalls: ToolCall[]; finishReason: string }
 /** One model call: stream text deltas to `onText`, resolve with the full result. */
 export type StreamFn = (req: ModelRequest, onText: (delta: string) => void) => Promise<ModelResult>;
@@ -70,7 +75,7 @@ export function makeGroqStream(opts: {
       stream: true,
       messages: req.messages,
       tools: [WEB_SEARCH_TOOL],
-      tool_choice: req.allowTools ? "auto" : "none",
+      tool_choice: req.forceTool ? "required" : req.allowTools ? "auto" : "none",
       temperature: 0.2,
       max_completion_tokens: 1500,
       ...(isGptOss ? { reasoning_effort: opts.reasoningEffort, include_reasoning: false } : {}),

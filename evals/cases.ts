@@ -10,7 +10,7 @@ export interface EvalCase { name: string; tz: string; steps: (now: Date) => Eval
 
 const DAY = 86_400_000;
 const IST = "Asia/Kolkata";
-const NO_RECORD = /(no record|don't have (any )?record|do not have (any )?record|no (earlier |previous |past )?(conversation|turns?|messages?)|nothing (recorded|logged)|didn't ask|haven't (talked|spoken|chatted)|memory (starts|begins))/i;
+const NO_RECORD = /(no record|(don't|do not) have any (recorded|earlier|previous)|no recorded|don't have (any )?record|do not have (any )?record|no (earlier |previous |past )?(conversation|turns?|messages?)|nothing (recorded|logged)|didn't ask|haven't (talked|spoken|chatted)|memory (starts|begins))/i;
 
 const istDate = (d: Date) => new Date(d.getTime() + 330 * 60_000).toISOString().slice(0, 10);
 

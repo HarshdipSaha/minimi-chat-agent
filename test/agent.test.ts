@@ -12,7 +12,7 @@ function fakeModel(script: Step[]) {
   const calls: ModelRequest[] = [];
   let i = 0;
   const stream: StreamFn = async (req, onText) => {
-    calls.push({ allowTools: req.allowTools, messages: structuredClone(req.messages) });
+    calls.push({ allowTools: req.allowTools, forceTool: req.forceTool ?? false, messages: structuredClone(req.messages) });
     const step = script[i++];
     if (step.text) onText(step.text);
     const toolCalls = (step.calls ?? []).map((c) => ({
@@ -244,4 +244,16 @@ test("answers that used search but cite nothing get a 'Sources checked' line (cu
   assert.equal(turn.answerText, "Everything is unchanged.\n\nSources checked: [1] [6].\n\nAs of 11 Nov 2026.");
   const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
   assert.deepEqual(sources.sources.map((s) => s.n), [1, 6]);
+});
+
+test("a recheck forces a search on the first step; ordinary turns do not", async () => {
+  const store = new Store(":memory:");
+  const seed = fakeModel([{ calls: [{ id: "a", searches: [{ query: "linux kernel creator" }] }] }, { text: "Torvalds [1]." }]);
+  await runTurn({ text: "who made linux?", tz: "UTC", at: new Date("2026-11-03T05:00:00Z") }, deps(seed.stream, fakeSearch().fn, store), () => {});
+  assert.equal(seed.calls[0].forceTool, false);
+
+  const m = fakeModel([{ calls: [{ id: "a", searches: [{ query: "linux kernel creator" }] }] }, { text: "Still correct." }]);
+  await runTurn({ text: "What did I ask on 3 November? Still correct?", tz: "UTC" }, deps(m.stream, fakeSearch().fn, store), () => {});
+  assert.equal(m.calls[0].forceTool, true);
+  assert.equal(m.calls[1].forceTool, false);
 });

@@ -91,7 +91,8 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   const sinceOk = (d: string | null): string | null => (d && pastDates.length && d >= pastDates[0] ? d : null);
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const res = await deps.stream({ messages, allowTools: step < MAX_STEPS - 1 }, onText);
+    // A recheck is never answered from memory alone: the first step must search.
+    const res = await deps.stream({ messages, allowTools: step < MAX_STEPS - 1, forceTool: step === 0 && recheckTurns.length > 0 }, onText);
     write(norm.flush());
     if (res.finishReason !== "tool_calls" || res.toolCalls.length === 0) break;
 
