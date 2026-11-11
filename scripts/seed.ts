@@ -10,20 +10,16 @@ import { Store, type NewTurn } from "../src/store.ts";
 const SEED_FILE = "data/seed.json";
 const DAY = 86_400_000;
 
-/** A turn recorded from a real run, plus how many days before "now" it should appear to have happened. */
-export interface SeedEntry { daysAgo: number; turn: NewTurn }
-
-/** Re-date entries relative to `now`, so a seeded "6 days ago" is always 6 days before whenever you load it. */
-export function shiftTurns(entries: SeedEntry[], now: Date): NewTurn[] {
-  return entries.map((e) => ({ ...e.turn, at: new Date(now.getTime() - e.daysAgo * DAY).toISOString(), seed: true }));
-}
-
 export function loadSeed(store: Store, turns: NewTurn[]): void {
   store.deleteSeed();
   for (const t of turns) store.insert({ ...t, seed: true });
 }
 
-/** Run each question through the real agent (real search, real model) and save the exchange. */
+/**
+ * Run each question through the real agent (real search, real model) and save the exchange. Each turn is
+ * recorded "as of" daysAgo before now (via the per-turn `at` override), so its own "As of <date>" line and
+ * its timestamp agree. Dates stay absolute: it is a recorded history, not a moving one.
+ */
 async function record(): Promise<void> {
   loadDotEnv();
   const config = loadConfig();
@@ -34,11 +30,12 @@ async function record(): Promise<void> {
     search: makeExaSearch({ apiKey: config.exaKey, type: config.exaType }),
     store: scratch, clock: systemClock(), config,
   };
-  const entries: SeedEntry[] = [];
+  const entries: NewTurn[] = [];
+  const base = Date.now();
   for (const { daysAgo, q } of questions) {
-    console.log(`recording (${daysAgo}d ago): ${q}`);
-    const { id: _id, ...turn } = await runTurn({ text: q, tz: config.defaultTz }, deps, () => {});
-    entries.push({ daysAgo, turn: { ...turn, seed: true } });
+    console.log(`recording (as of ${daysAgo}d ago): ${q}`);
+    const { id: _id, ...turn } = await runTurn({ text: q, tz: config.defaultTz, at: new Date(base - daysAgo * DAY) }, deps, () => {});
+    entries.push({ ...turn, seed: true });
   }
   writeFileSync(SEED_FILE, JSON.stringify(entries, null, 2));
   console.log(`saved ${entries.length} real exchanges to ${SEED_FILE}`);
@@ -47,14 +44,14 @@ async function record(): Promise<void> {
 function load(): void {
   loadDotEnv();
   if (!existsSync(SEED_FILE)) throw new Error(`${SEED_FILE} not found. Run \`npm run seed:record\` first (needs API keys).`);
-  const entries = JSON.parse(readFileSync(SEED_FILE, "utf8")) as SeedEntry[];
-  const turns = shiftTurns(entries, systemClock().now());
+  const turns = JSON.parse(readFileSync(SEED_FILE, "utf8")) as NewTurn[];
   const store = new Store(process.env.DB_PATH ?? "data/minimi.db");
   loadSeed(store, turns);
   store.close();
-  console.log(`loaded ${turns.length} demo turns (real answers, re-dated relative to now, tagged "demo seed"):`);
+  console.log(`loaded ${turns.length} demo turns (real recorded answers, tagged "demo seed"):`);
   for (const t of turns) console.log(`  ${t.at.slice(0, 10)}  ${t.userText.slice(0, 80)}`);
-  console.log("Try: \"What did I ask you last week? Is your answer still correct?\"");
+  const first = turns[0]?.at.slice(0, 10);
+  console.log(`Try: "What did I ask you on ${first}? Is your answer still correct today?"`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
