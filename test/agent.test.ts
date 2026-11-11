@@ -61,7 +61,7 @@ test("parallel searches pass objective, get global [n] numbering; only cited sou
   const s = fakeSearch();
   const events: AgentEvent[] = [];
   const turn = await runTurn({ text: "neon vs supabase price", tz: "UTC" }, deps(m.stream, s.fn), (e) => events.push(e));
-  assert.deepEqual(s.calls.map((c) => [c.query, c.objective, c.since]), [["neon pricing", "find plan prices", null], ["supabase pricing", "find plan prices", "2026-11-03"]]);
+  assert.deepEqual(s.calls.map((c) => [c.query, c.objective, c.since]), [["neon pricing", "find plan prices", null], ["supabase pricing", "find plan prices", null]]); // since dropped: empty memory
   const toolMsgs = m.calls[1].messages.filter((x) => x.role === "tool") as { tool_call_id: string; content: string }[];
   assert.deepEqual(toolMsgs.map((x) => x.tool_call_id), ["a", "b"]);
   assert.match(toolMsgs[0].content, /^\[1\] neon 0/);
@@ -140,4 +140,28 @@ test("the agent stores and emits normalized citations and detects the cited sour
   assert.equal(turn.answerText, "Node 26 is current [1].");
   const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
   assert.deepEqual(sources.sources.map((x) => x.n), [1]);
+});
+
+test("normalizer swaps narrow no-break spaces and non-breaking hyphens for plain ones", () => {
+  const n = makeCiteNormalizer();
+  assert.equal(n.push("as of\u202fNov\u202f3 pay\u2011as\u2011you\u2011go\u00a0plan"), "as of Nov 3 pay-as-you-go plan");
+});
+
+test("a 'since' the model invented is dropped; one at or after a visible past turn is kept", async () => {
+  // empty memory: any since is a guess
+  const m1 = fakeModel([{ tools: [{ id: "a", input: { query: "neon pricing", objective: "o", since: "2024-01-01" } }] }, { text: "ok" }]);
+  const s1 = fakeSearch();
+  await runTurn({ text: "neon pricing?", tz: "UTC" }, deps(m1.stream, s1.fn), () => {});
+  assert.equal(s1.calls[0].since, null);
+
+  // memory has a turn on 3 Nov: since 2026-11-03 is a legitimate recheck window, 2024 still isn't
+  const store = new Store(":memory:");
+  await runTurn({ text: "neon pricing?", tz: "UTC", at: new Date("2026-11-03T05:00:00Z") }, deps(fakeModel([{ text: "$19" }]).stream, fakeSearch().fn, store), () => {});
+  const m2 = fakeModel([{ tools: [
+    { id: "a", input: { query: "neon news", objective: "o", since: "2026-11-03" } },
+    { id: "b", input: { query: "neon old", objective: "o", since: "2024-01-01" } },
+  ] }, { text: "ok" }]);
+  const s2 = fakeSearch();
+  await runTurn({ text: "what did I ask on 3 November? still correct?", tz: "UTC" }, deps(m2.stream, s2.fn, store), () => {});
+  assert.deepEqual(s2.calls.map((c) => c.since), ["2026-11-03", null]);
 });

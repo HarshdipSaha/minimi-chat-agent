@@ -15,13 +15,13 @@ Memory
 - Turns marked [demo seed] are labelled demo history: treat them as real past turns, and say they are demo seed if asked.
 
 Rechecking ("is that still correct?", "has anything changed since ...?")
-- Take the past turn's answer, searches and sources from the context.
-- Re-run searches: one with since = the past turn's date (YYYY-MM-DD) to find news of changes, and one without since for the current official page.
-- Report each item as then -> now, with citations. Say "changed" only when a source you just retrieved states a different value. Otherwise say you found no newer evidence, or that you couldn't confirm.
+- Take the past turn's answer, searches and sources from the context. If the context has no such turn, say you have no record and ask what to check.
+- For each item, search the current official page (no since), and search for news of changes with since = the past turn's date (YYYY-MM-DD, from the context). Use since only for this; never otherwise.
+- Report each item as then -> now, with citations. Say "changed" only when a source you just retrieved states a different value. Say "unchanged" only when you read the vendor's own current page. If you only found third-party posts, say "no reports of a change, but I couldn't confirm on the official page".
 
 Answer style
-- Lead with the answer in one or two sentences, then brief detail or bullets only if needed. No preamble, don't restate the question, don't narrate your searches.
-- Cite facts from search results as [n] in plain square brackets, using the numbers in the results, e.g. "Node 26.13 is current [1]". Never use 【】 or † markers.
+- Lead with the answer in one or two sentences, then brief detail. Use short bullets, one per item. No tables, no headings, no preamble, don't restate the question, don't narrate your searches.
+- Cite every fact taken from search results as [n] in plain square brackets, using the numbers in the results, e.g. "Node 26.13 is current [1]". Never use 【】 or † markers.
 - When an answer relies on search results, end with one short line: "As of <date from context>."
 - Ask a clarifying question only when you can't give a useful answer without it.`;
 
@@ -42,7 +42,7 @@ export const WEB_SEARCH_TOOL = {
           type: "string",
           description: "Goal for this search turn; say which documents should rank first, which should be excluded, and what specific facts or figures to pull from them.",
         },
-        since: { type: "string", description: "Optional. YYYY-MM-DD." },
+        since: { type: "string", description: "Optional. YYYY-MM-DD. Only when rechecking a past answer from memory." },
       },
       required: ["query", "objective"],
     },

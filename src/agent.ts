@@ -33,8 +33,9 @@ const SearchInput = z.object({
 });
 
 /**
- * gpt-oss was trained to cite as 【1†L1-L2】. Rewrite to plain [1] as the text streams, holding back
- * a half-received marker until its closing bracket arrives.
+ * gpt-oss was trained to cite as 【1†L1-L2】 and likes narrow no-break spaces and non-breaking hyphens.
+ * Rewrite to plain [1], spaces and hyphens as the text streams, holding back a half-received marker
+ * until its closing bracket arrives.
  */
 export function makeCiteNormalizer(): { push(delta: string): string; flush(): string } {
   let pending = "";
@@ -44,7 +45,7 @@ export function makeCiteNormalizer(): { push(delta: string): string; flush(): st
       pending = "";
       const open = s.lastIndexOf("【");
       if (open >= 0 && s.indexOf("】", open) < 0) { pending = s.slice(open); s = s.slice(0, open); }
-      return s.replace(/【(\d+)[^】]*】/g, "[$1]");
+      return s.replace(/【(\d+)[^】]*】/g, "[$1]").replace(/[\u202f\u00a0]/g, " ").replace(/\u2011/g, "-");
     },
     flush() { const p = pending; pending = ""; return p; },
   };
@@ -58,7 +59,7 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   const t0 = performance.now();
   let ttftMs: number | null = null;
 
-  const { block, history } = buildContext(input.text, now, deps.store, input.tz);
+  const { block, history, pastDates } = buildContext(input.text, now, deps.store, input.tz);
   const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
   for (const h of history) {
     messages.push({ role: "user", content: `[${formatLocal(new Date(h.at), input.tz)}] ${h.userText}` });
@@ -95,9 +96,12 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
     });
     for (const { args } of parsed) if (args?.success) emit({ type: "status", text: `Searching: ${args.data.query}` });
 
+    // `since` is only meaningful for rechecking something the model can see in memory. A date earlier than
+    // every visible past turn (or any date at all in an empty memory) is the model guessing: drop it.
+    const sinceOk = (d: string | null): string | null => (d && pastDates.length && d >= pastDates[0] ? d : null);
     const numResults = parsed.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
     const records = await Promise.all(parsed.map(({ args }) =>
-      args?.success ? deps.search({ query: args.data.query, objective: args.data.objective, since: args.data.since, numResults }) : Promise.resolve(null)));
+      args?.success ? deps.search({ query: args.data.query, objective: args.data.objective, since: sinceOk(args.data.since), numResults }) : Promise.resolve(null)));
 
     parsed.forEach(({ tc, args }, i) => {
       const rec = records[i];
