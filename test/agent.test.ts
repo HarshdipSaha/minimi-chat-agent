@@ -124,7 +124,7 @@ test("last step disables tools so the loop always ends with an answer", async ()
   const turn = await runTurn({ text: "x", tz: "UTC" }, deps(m.stream, fakeSearch().fn), () => {});
   assert.equal(m.calls.length, 4);
   assert.deepEqual(m.calls.map((c) => c.allowTools), [true, true, true, false]);
-  assert.equal(turn.answerText, "Here's what I found [1].");
+  assert.equal(turn.answerText, "Here's what I found [1].\n\nAs of 11 Nov 2026.");
 });
 
 test("an empty model answer becomes a polite fallback, still persisted", async () => {
@@ -153,7 +153,7 @@ test("the agent stores and emits normalized citations and detects the cited sour
   ]);
   const events: AgentEvent[] = [];
   const turn = await runTurn({ text: "latest node?", tz: "UTC" }, deps(m.stream, fakeSearch().fn), (e) => events.push(e));
-  assert.equal(turn.answerText, "Node 26 is current [1].");
+  assert.equal(turn.answerText, "Node 26 is current [1].\n\nAs of 11 Nov 2026.");
   const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
   assert.deepEqual(sources.sources.map((x) => x.n), [1]);
 });
@@ -204,4 +204,15 @@ test("no twins when the user did not point at a past turn that searched the web"
   const s = fakeSearch();
   await runTurn({ text: "neon pricing?", tz: "UTC" }, deps(m.stream, s.fn), () => {});
   assert.equal(s.calls.length, 1);
+});
+
+test("answers that used search get an 'As of <date>' line added by code when the model omitted it", async () => {
+  const m = fakeModel([{ calls: [{ id: "a", searches: [{ query: "node release" }] }] }, { text: "Node 26 is current [1]." }]);
+  const turn = await runTurn({ text: "latest node?", tz: "Asia/Kolkata" }, deps(m.stream, fakeSearch().fn), () => {});
+  assert.equal(turn.answerText, "Node 26 is current [1].\n\nAs of 11 Nov 2026.");
+  const m2 = fakeModel([{ calls: [{ id: "a", searches: [{ query: "node release" }] }] }, { text: "Node 26 is current [1]. As of 11 Nov 2026." }]);
+  const t2 = await runTurn({ text: "latest node?", tz: "Asia/Kolkata" }, deps(m2.stream, fakeSearch().fn), () => {});
+  assert.equal(t2.answerText, "Node 26 is current [1]. As of 11 Nov 2026.");
+  const m3 = fakeModel([{ text: "Hi!" }]);
+  assert.equal((await runTurn({ text: "hi", tz: "UTC" }, deps(m3.stream, fakeSearch().fn), () => {})).answerText, "Hi!");
 });

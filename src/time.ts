@@ -36,6 +36,11 @@ export function formatLocal(at: Date, tz: string): string {
   }).format(at);
 }
 
+/** Date only, e.g. "11 Nov 2026". */
+export function formatDay(at: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short", year: "numeric" }).format(at);
+}
+
 function localMidnightUtc(y: number, m: number, d: number, tz: string): Date {
   const utcMidnight = new Date(Date.UTC(y, m - 1, d));
   return new Date(utcMidnight.getTime() - tzOffsetMinutes(tz, utcMidnight) * 60_000);

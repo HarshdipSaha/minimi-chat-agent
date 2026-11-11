@@ -5,7 +5,7 @@ import type { ChatMessage, StreamFn } from "./llm.ts";
 import { SYSTEM_PROMPT } from "./prompt.ts";
 import { formatForModel, type SearchFn } from "./search.ts";
 import type { SearchRecord, Store, Turn } from "./store.ts";
-import { formatLocal } from "./time.ts";
+import { formatDay, formatLocal } from "./time.ts";
 
 export interface Source { n: number; url: string; title: string; publishedDate: string | null }
 
@@ -139,6 +139,13 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   if (!answer.trim()) {
     answer = "I couldn't put an answer together for that. Could you try rephrasing it?";
     emit({ type: "text", text: answer });
+  }
+
+  // Answers that rest on web results always say when they were true: added here, not left to the model.
+  if (searches.length && answer.trim() && !/\bas of\b/i.test(answer)) {
+    const line = `\n\nAs of ${formatDay(now, input.tz)}.`;
+    answer += line;
+    emit({ type: "text", text: line });
   }
 
   const totalMs = Math.round(performance.now() - t0);
