@@ -6,7 +6,8 @@ import { makeExaSearch } from "../src/search.ts";
 import { Store } from "../src/store.ts";
 import { CASES, type Expect } from "./cases.ts";
 
-function check(answer: string, searches: number, cited: number, e: Expect = {}): string[] {
+function check(rawAnswer: string, searches: number, cited: number, e: Expect = {}): string[] {
+  const answer = rawAnswer.replace(/’/g, "'"); // the model writes curly apostrophes; the patterns use straight ones
   const f: string[] = [];
   for (const r of e.match ?? []) if (!r.test(answer)) f.push(`missing ${r}`);
   for (const r of e.notMatch ?? []) if (r.test(answer)) f.push(`unexpected ${r}`);
