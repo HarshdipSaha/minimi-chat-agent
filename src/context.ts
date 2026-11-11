@@ -21,6 +21,12 @@ export interface TurnContext {
   history: Turn[]; // recent turns, sent as real conversation messages
   /** Local dates (YYYY-MM-DD) of every past turn the model can see. A `since` filter earlier than all of them is invented. */
   pastDates: string[];
+  /**
+   * Set when the user pointed at a past date whose turns searched the web: the earliest such local date.
+   * That is a recheck ("is it still correct?"), and the agent then makes sure both the current pages and
+   * the pages published since that date are searched, instead of trusting the model to remember to.
+   */
+  recheckSince: string | null;
 }
 
 /** Everything the model needs to know about time and memory for this turn, assembled in code. */
@@ -29,6 +35,7 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
   const inHistory = new Set(history.map((t) => t.id));
   const first = store.first();
   const pastDates = new Set(history.map((t) => localDate(new Date(t.at), tz)));
+  let recheckSince: string | null = null;
   const lines = [
     `now: ${formatLocal(now, tz)} (${tz})`,
     `memory_starts: ${first ? formatLocal(new Date(first.at), tz) : "no earlier conversations recorded; this is the first one"}`,
@@ -36,7 +43,11 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
 
   for (const ref of resolveDateRefs(text, now, tz)) {
     const turns = store.between(ref.start, ref.end).slice(-6);
-    for (const t of turns) pastDates.add(localDate(new Date(t.at), tz));
+    for (const t of turns) {
+      const d = localDate(new Date(t.at), tz);
+      pastDates.add(d);
+      if (t.searches.length && (recheckSince === null || d < recheckSince)) recheckSince = d;
+    }
     lines.push(`\nuser said "${ref.text}" → ${ref.label}`);
     lines.push(turns.length ? turns.map((t) => summarizeTurn(t, tz)).join("\n") : `  no turns recorded on ${ref.label}.`);
   }
@@ -47,5 +58,5 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
     lines.push(`\nrelated earlier turns (keyword match):\n${related.map((t) => summarizeTurn(t, tz)).join("\n")}`);
   }
 
-  return { block: `<context>\n${lines.join("\n")}\n</context>`, history, pastDates: [...pastDates].sort() };
+  return { block: `<context>\n${lines.join("\n")}\n</context>`, history, pastDates: [...pastDates].sort(), recheckSince };
 }

@@ -66,8 +66,8 @@ test("one batched call runs its searches in parallel, passes objective, numbers 
   const toolMsgs = m.calls[1].messages.filter((x) => x.role === "tool") as { tool_call_id: string; content: string }[];
   assert.equal(toolMsgs.length, 1);
   assert.equal(toolMsgs[0].tool_call_id, "a");
-  assert.match(toolMsgs[0].content, /## search: neon pricing\n\[1\] neon 0/);
-  assert.match(toolMsgs[0].content, /## search: supabase pricing\n\[6\] supabase 0/);
+  assert.match(toolMsgs[0].content, /## search: neon pricing \(current pages\)\n\[1\] neon 0/);
+  assert.match(toolMsgs[0].content, /## search: supabase pricing \(current pages\)\n\[6\] supabase 0/);
   const assistant = m.calls[1].messages.find((x) => x.role === "assistant" && "tool_calls" in x) as any;
   assert.equal(assistant.tool_calls.length, 1);
   assert.equal(turn.searches.length, 2);
@@ -175,4 +175,33 @@ test("a 'since' the model invented is dropped; one at or after a visible past tu
   const s2 = fakeSearch();
   await runTurn({ text: "what did I ask on 3 November? still correct?", tz: "UTC" }, deps(m2.stream, s2.fn, store), () => {});
   assert.deepEqual(s2.calls.map((c) => c.since), ["2026-11-03", null]);
+});
+
+test("recheck: a since-less search gets a since-filtered twin (and vice versa), all in one tool message", async () => {
+  // a past turn on 3 Nov that searched the web
+  const store = new Store(":memory:");
+  const seedModel = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing" }] }] }, { text: "Neon is $19 [1]." }]);
+  await runTurn({ text: "neon pricing?", tz: "UTC", at: new Date("2026-11-03T05:00:00Z") }, deps(seedModel.stream, fakeSearch().fn, store), () => {});
+
+  const m = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing now" }, { query: "supabase pricing now", since: "2026-11-03" }] }] }, { text: "ok" }]);
+  const s = fakeSearch();
+  const events: AgentEvent[] = [];
+  const turn = await runTurn({ text: "What did I ask on 3 November? Still correct?", tz: "UTC" }, deps(m.stream, s.fn, store), (e) => events.push(e));
+  assert.deepEqual(s.calls.map((c) => [c.query, c.since]), [
+    ["neon pricing now", null], ["supabase pricing now", "2026-11-03"],
+    ["neon pricing now", "2026-11-03"], ["supabase pricing now", null],
+  ]);
+  assert.equal(turn.searches.length, 4);
+  const tools = m.calls[1].messages.filter((x) => x.role === "tool") as { content: string }[];
+  assert.equal(tools.length, 1);
+  assert.match(tools[0].content, /## search: neon pricing now \(current pages\)/);
+  assert.match(tools[0].content, /## search: neon pricing now \(pages published since 2026-11-03\)/);
+  assert.ok(events.some((e) => e.type === "status" && /Checking for changes since 2026-11-03/.test(e.text)));
+});
+
+test("no twins when the user did not point at a past turn that searched the web", async () => {
+  const m = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing" }] }] }, { text: "ok" }]);
+  const s = fakeSearch();
+  await runTurn({ text: "neon pricing?", tz: "UTC" }, deps(m.stream, s.fn), () => {});
+  assert.equal(s.calls.length, 1);
 });

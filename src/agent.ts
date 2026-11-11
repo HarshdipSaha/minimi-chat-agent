@@ -61,7 +61,7 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   const t0 = performance.now();
   let ttftMs: number | null = null;
 
-  const { block, history, pastDates } = buildContext(input.text, now, deps.store, input.tz);
+  const { block, history, pastDates, recheckSince } = buildContext(input.text, now, deps.store, input.tz);
   const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
   for (const h of history) {
     messages.push({ role: "user", content: `[${formatLocal(new Date(h.at), input.tz)}] ${h.userText}` });
@@ -100,28 +100,39 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
       try { raw = JSON.parse(tc.function.arguments || "{}"); } catch { /* handled by the schema check below */ }
       return { tc, args: tc.function.name === "web_search" ? SearchInput.safeParse(raw) : null };
     });
-    const planned = parsed.flatMap(({ args }) => (args?.success ? args.data.searches : []));
+    const asked = parsed.flatMap(({ args }) => (args?.success ? args.data.searches : []));
+    const planned = asked.map((q) => ({ ...q, since: sinceOk(q.since) }));
+    // Recheck: make sure each question is searched both ways (current pages, and pages published since then).
+    const twins = recheckSince
+      ? planned.map((q) => ({ ...q, since: q.since ? null : recheckSince }))
+          .filter((t) => !planned.some((q) => q.query === t.query && q.since === t.since))
+      : [];
     for (const q of planned) emit({ type: "status", text: `Searching: ${q.query}` });
+    if (twins.length) emit({ type: "status", text: `Checking for changes since ${recheckSince}` });
 
-    const numResults = planned.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
-    const records = await Promise.all(planned.map((q) =>
-      deps.search({ query: q.query, objective: q.objective, since: sinceOk(q.since), numResults })));
+    const all = [...planned, ...twins];
+    const numResults = all.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
+    const records = await Promise.all(all.map((q) =>
+      deps.search({ query: q.query, objective: q.objective, since: q.since, numResults })));
+    const section = (rec: SearchRecord): string => {
+      const firstIndex = sources.length + 1;
+      rec.results.forEach((r, k) => sources.push({ n: firstIndex + k, url: r.url, title: r.title, publishedDate: r.publishedDate }));
+      searches.push(rec);
+      const scope = rec.since ? `pages published since ${rec.since}` : "current pages";
+      return `## search: ${rec.query} (${scope})\n${formatForModel(rec, firstIndex)}`;
+    };
 
     let next = 0;
+    const answered: { tc: (typeof parsed)[number]["tc"]; parts: string[] }[] = [];
     for (const { tc, args } of parsed) {
       if (!args?.success) {
         messages.push({ role: "tool", tool_call_id: tc.id, content: 'Error: invalid arguments. Call web_search with {"searches": [{"query": ..., "objective": ..., "since": optional YYYY-MM-DD}]} (1-5 searches).' });
         continue;
       }
-      const parts = args.data.searches.map(() => {
-        const rec = records[next++];
-        const firstIndex = sources.length + 1;
-        rec.results.forEach((r, k) => sources.push({ n: firstIndex + k, url: r.url, title: r.title, publishedDate: r.publishedDate }));
-        searches.push(rec);
-        return `## search: ${rec.query}\n${formatForModel(rec, firstIndex)}`;
-      });
-      messages.push({ role: "tool", tool_call_id: tc.id, content: parts.join("\n\n") });
+      answered.push({ tc, parts: args.data.searches.map(() => section(records[next++])) });
     }
+    if (answered.length) answered[answered.length - 1].parts.push(...twins.map(() => section(records[next++])));
+    for (const { tc, parts } of answered) messages.push({ role: "tool", tool_call_id: tc.id, content: parts.join("\n\n") });
     if (answer && !answer.endsWith("\n")) needsBreak = true;
   }
 
