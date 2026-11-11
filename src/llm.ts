@@ -48,21 +48,25 @@ export function makeGroqStream(opts: {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   maxWaitMs?: number;
+  /** Used when every key is rate limited on `model` (limits are per model). */
+  fallbackModel?: string;
   /** Optional per-call timing hook (set DEBUG_TIMING=1 in the app to print these). */
   onMetrics?: (m: { slot: number; ttfbMs: number; firstTextMs: number | null; totalMs: number; finishReason: string }) => void;
 }): StreamFn {
   const fetchFn = opts.fetchFn ?? fetch;
   const ring = new KeyRing(opts.keys, opts.now);
+  // Groq rate limits are per model, so a second model is extra capacity when every key is limited on the first.
+  const fallbackRing = opts.fallbackModel && opts.fallbackModel !== opts.model ? new KeyRing(opts.keys, opts.now) : null;
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const maxWait = opts.maxWaitMs ?? 8_000;
-  const isGptOss = opts.model.startsWith("openai/gpt-oss");
 
-  async function once(key: string, req: ModelRequest, onText: (d: string) => void): Promise<ModelResult> {
+  async function once(model: string, ring: KeyRing, key: string, req: ModelRequest, onText: (d: string) => void): Promise<ModelResult> {
+    const isGptOss = model.startsWith("openai/gpt-oss");
     const t0 = performance.now();
     let ttfbMs = 0;
     let firstTextMs: number | null = null;
     const body: Record<string, unknown> = {
-      model: opts.model,
+      model,
       stream: true,
       messages: req.messages,
       tools: [WEB_SEARCH_TOOL],
@@ -143,17 +147,22 @@ export function makeGroqStream(opts: {
     let streamed = false;
     const guarded = (d: string) => { streamed = true; onText(d); };
     let lastError = "";
-    for (let attempt = 0; attempt < ring.size * 2 + 1; attempt++) {
+    for (let attempt = 0; attempt < ring.size * (fallbackRing ? 4 : 2) + 2; attempt++) {
+      let model = opts.model;
+      let active = ring;
       let key = ring.next();
+      if (!key && fallbackRing) {
+        key = fallbackRing.next();
+        if (key) { model = opts.fallbackModel!; active = fallbackRing; }
+      }
       if (!key) {
-        const wait = ring.waitMs();
+        const wait = Math.min(ring.waitMs(), fallbackRing?.waitMs() ?? Infinity);
         if (wait > maxWait) throw new Error(`All ${ring.size} Groq keys are rate limited right now. Try again in about ${Math.ceil(wait / 1000)}s.`);
         await sleep(wait);
-        key = ring.next();
-        if (!key) continue;
+        continue;
       }
       try {
-        return await once(key, req, guarded);
+        return await once(model, active, key, req, guarded);
       } catch (err) {
         if (err instanceof Retryable && !streamed) { lastError = err.message; continue; }
         throw err;

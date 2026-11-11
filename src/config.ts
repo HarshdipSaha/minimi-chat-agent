@@ -6,6 +6,7 @@ export interface Config {
   groqKeys: string[];
   exaKey: string;
   model: string;
+  fallbackModel: string;
   reasoningEffort: ReasoningEffort;
   port: number;
   dbPath: string;
@@ -36,6 +37,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     groqKeys,
     exaKey: env.EXA_API_KEY!,
     model: env.MODEL ?? "openai/gpt-oss-120b",
+    fallbackModel: env.FALLBACK_MODEL ?? "openai/gpt-oss-20b",
     reasoningEffort,
     port: Number(env.PORT ?? 3000),
     dbPath: env.DB_PATH ?? "data/minimi.db",

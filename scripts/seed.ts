@@ -26,7 +26,7 @@ async function record(): Promise<void> {
   const questions = JSON.parse(readFileSync("scripts/seed-questions.json", "utf8")) as { daysAgo: number; q: string }[];
   const scratch = new Store(":memory:");
   const deps = {
-    stream: makeGroqStream({ keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort }),
+    stream: makeGroqStream({ keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort, maxWaitMs: 90_000 }),
     search: makeExaSearch({ apiKey: config.exaKey, type: config.exaType }),
     store: scratch, clock: systemClock(), config,
   };

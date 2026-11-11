@@ -117,3 +117,17 @@ test("non-retryable errors surface immediately; 413 is explained", async () => {
   const f2 = fakeFetch([err(413)]);
   await assert.rejects(makeGroqStream({ ...base, keys: ["k1"], fetchFn: f2.fn })(req, () => {}), /too large/);
 });
+
+test("when every key is limited on the primary model, the fallback model takes over immediately", async () => {
+  const calls: string[] = [];
+  const fn = (async (_u: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    calls.push(body.model);
+    return body.model === "big" ? new Response("{}", { status: 429, headers: { "retry-after": "30" } }) : new Response(TEXT, { status: 200 });
+  }) as unknown as typeof fetch;
+  const stream = makeGroqStream({ model: "big", fallbackModel: "small", reasoningEffort: "low", keys: ["k1", "k2"], fetchFn: fn });
+  assert.equal((await stream(req, () => {})).text, "Hello");
+  assert.deepEqual(calls, ["big", "big", "small"]);
+  await stream(req, () => {});
+  assert.deepEqual(calls.slice(3), ["small"]); // primary keys are still cooling: no wasted attempts
+});

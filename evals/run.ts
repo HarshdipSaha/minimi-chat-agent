@@ -24,7 +24,8 @@ const only = args.find((a) => !a.startsWith("--"));
 
 loadDotEnv();
 const config = loadConfig();
-const stream = makeGroqStream({ keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort });
+// Evals wait out rate limits (up to 90s) instead of failing, and never fall back: they measure the primary model.
+const stream = makeGroqStream({ keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort, maxWaitMs: 90_000 });
 const search = makeExaSearch({ apiKey: config.exaKey, type: config.exaType, ttlMs: 0 }); // no cache: every run hits the live web
 const now = new Date();
 interface Row { run: number; case: string; step: number; graded: boolean; pass: boolean; failures: string[]; ttftMs: number | null; totalMs: number; searches: number; answer: string }

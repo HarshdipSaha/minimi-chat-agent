@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const store = new Store(config.dbPath);
   const app = createApp({
     stream: makeGroqStream({
-      keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort,
+      keys: config.groqKeys, model: config.model, fallbackModel: config.fallbackModel, reasoningEffort: config.reasoningEffort,
       onMetrics: process.env.DEBUG_TIMING ? (m) => console.log(`[llm] key#${m.slot} first-byte ${m.ttfbMs}ms first-text ${m.firstTextMs ?? "-"}ms total ${m.totalMs}ms (${m.finishReason})`) : undefined,
     }),
     search: makeExaSearch({ apiKey: config.exaKey, type: config.exaType }),

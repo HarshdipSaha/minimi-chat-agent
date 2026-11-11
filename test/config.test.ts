@@ -37,3 +37,8 @@ test("loadConfig applies defaults and overrides", () => {
 test("loadConfig rejects an invalid REASONING_EFFORT", () => {
   assert.throws(() => loadConfig({ GROQ_API_KEYS: "a", EXA_API_KEY: "e", REASONING_EFFORT: "max" }), /REASONING_EFFORT must be low, medium or high/);
 });
+
+test("fallback model defaults to gpt-oss-20b and can be overridden", () => {
+  assert.equal(loadConfig({ GROQ_API_KEYS: "a", EXA_API_KEY: "e" }).fallbackModel, "openai/gpt-oss-20b");
+  assert.equal(loadConfig({ GROQ_API_KEYS: "a", EXA_API_KEY: "e", FALLBACK_MODEL: "x/y" }).fallbackModel, "x/y");
+});
