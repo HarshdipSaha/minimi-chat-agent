@@ -32,6 +32,24 @@ const SearchInput = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().transform((v) => v ?? null),
 });
 
+/**
+ * gpt-oss was trained to cite as 【1†L1-L2】. Rewrite to plain [1] as the text streams, holding back
+ * a half-received marker until its closing bracket arrives.
+ */
+export function makeCiteNormalizer(): { push(delta: string): string; flush(): string } {
+  let pending = "";
+  return {
+    push(delta) {
+      let s = pending + delta;
+      pending = "";
+      const open = s.lastIndexOf("【");
+      if (open >= 0 && s.indexOf("】", open) < 0) { pending = s.slice(open); s = s.slice(0, open); }
+      return s.replace(/【(\d+)[^】]*】/g, "[$1]");
+    },
+    flush() { const p = pending; pending = ""; return p; },
+  };
+}
+
 const MAX_STEPS = 4; // up to 3 rounds of searching, then a forced answer
 const HISTORY_ANSWER_CHARS = 700;
 
@@ -53,16 +71,20 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   let answer = "";
   let needsBreak = false;
 
-  const onText = (delta: string): void => {
+  const norm = makeCiteNormalizer();
+  const write = (piece: string): void => {
+    if (!piece) return;
     if (ttftMs === null) ttftMs = Math.round(performance.now() - t0);
-    const text = needsBreak ? `\n\n${delta}` : delta;
+    const text = needsBreak ? `\n\n${piece}` : piece;
     needsBreak = false;
     answer += text;
     emit({ type: "text", text });
   };
+  const onText = (delta: string): void => write(norm.push(delta));
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const res = await deps.stream({ messages, allowTools: step < MAX_STEPS - 1 }, onText);
+    write(norm.flush());
     if (res.finishReason !== "tool_calls" || res.toolCalls.length === 0) break;
 
     messages.push({ role: "assistant", content: res.text || null, tool_calls: res.toolCalls });

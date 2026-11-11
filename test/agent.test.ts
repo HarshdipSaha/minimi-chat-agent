@@ -121,3 +121,23 @@ test("an empty model answer becomes a polite fallback, still persisted", async (
   assert.match(turn.answerText, /rephras/);
   assert.equal(d.store.count(), 1);
 });
+
+import { makeCiteNormalizer } from "../src/agent.ts";
+
+test("citation normalizer rewrites 【n†…】 to [n], even when split across chunks", () => {
+  const n = makeCiteNormalizer();
+  const out = ["Node is 26 ", "【1†L1", "-L2】 and ", "【2†L3】【3】.", " tail 【9"].map((d) => n.push(d)).join("") + n.flush();
+  assert.equal(out, "Node is 26 [1] and [2][3]. tail 【9");
+});
+
+test("the agent stores and emits normalized citations and detects the cited source", async () => {
+  const m = fakeModel([
+    { tools: [{ id: "a", input: { query: "node release", objective: "o" } }] },
+    { text: "Node 26 is current 【1†L1-L2】." },
+  ]);
+  const events: AgentEvent[] = [];
+  const turn = await runTurn({ text: "latest node?", tz: "UTC" }, deps(m.stream, fakeSearch().fn), (e) => events.push(e));
+  assert.equal(turn.answerText, "Node 26 is current [1].");
+  const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
+  assert.deepEqual(sources.sources.map((x) => x.n), [1]);
+});
