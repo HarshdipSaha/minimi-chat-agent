@@ -32,9 +32,11 @@ Optional: `npm run seed` loads three real recorded exchanges (labelled **demo se
 
 | | |
 |---|---|
-| `npm test` | 65 unit tests, no network or keys needed |
-| `npm run eval` | 8 multi-day scenarios against the live APIs (uses a little API quota); results in `evals/results/` |
+| `npm test` | 75 unit tests, no network or keys needed |
+| `npm run eval -- --runs=3` | 9 multi-day scenarios against the live APIs, repeated (uses API quota); results in `evals/results/` |
 | `npm run typecheck` | TypeScript check |
 | `npm run seed` / `seed:record` | load / re-record the demo history |
+
+Decision records (options considered, the five-advisor review, the verdict): [`docs/decisions/`](docs/decisions/).
 
 Layout: `src/` (agent loop, memory store, date resolution, Groq client with key rotation, Exa search, server), `public/index.html` (the whole UI), `test/`, `evals/`, `scripts/`.

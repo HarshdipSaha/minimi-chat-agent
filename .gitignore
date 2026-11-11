@@ -3,5 +3,7 @@ node_modules/
 data/*.db
 data/*.db-*
 evals/results/
-# internal planning notes (research, council transcripts, plans); DESIGN.md is the public write-up
-docs/
+# internal working notes; docs/decisions/ is the public record
+docs/council/
+docs/superpowers/
+docs/approaches.md
