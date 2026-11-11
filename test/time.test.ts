@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tzOffsetMinutes, localDate, formatLocal, resolveDateRefs } from "../src/time.ts";
+import { tzOffsetMinutes, localDate, formatLocal, resolveDateRefs, weekEarlier } from "../src/time.ts";
 
 const NOW = new Date("2026-11-11T09:30:00Z"); // Wed 11 Nov 2026, 15:00 IST
 const IST = "Asia/Kolkata";
@@ -56,4 +56,27 @@ test("'today' depends on the user's timezone", () => {
 test("no date words gives no refs; future dates are dropped", () => {
   assert.deepEqual(resolveDateRefs("thanks!", NOW, IST), []);
   assert.deepEqual(resolveDateRefs("remind me tomorrow", NOW, IST), []);
+});
+
+test("a bare weekday is flagged, explicit dates and weeks are not", () => {
+  assert.equal(resolveDateRefs("Last Tuesday I asked", NOW, IST)[0].weekday, true);
+  assert.equal(resolveDateRefs("on 3 November", NOW, IST)[0].weekday, false);
+  assert.equal(resolveDateRefs("what happened last week", NOW, IST)[0].weekday, false);
+});
+
+test("weekEarlier gives the same weekday one week before as its own whole-day window", () => {
+  const ref = resolveDateRefs("Last Tuesday I asked", NOW, IST)[0];
+  const older = weekEarlier(ref, IST);
+  assert.equal(older.label, "2026-11-03");
+  assert.equal(older.start.toISOString(), "2026-11-02T18:30:00.000Z");
+  assert.equal(older.end.toISOString(), "2026-11-03T18:30:00.000Z");
+});
+
+test("day windows are exact on a 25-hour DST day (New York, 1 Nov 2026) and a 23-hour one (8 Mar 2026)", () => {
+  const ny = "America/New_York";
+  const fall = resolveDateRefs("what did I ask on 1 November", new Date("2026-11-11T15:00:00Z"), ny)[0];
+  assert.equal(fall.start.toISOString(), "2026-11-01T04:00:00.000Z");
+  assert.equal(fall.end.toISOString(), "2026-11-02T05:00:00.000Z");
+  const spring = resolveDateRefs("what did I ask on 8 March", new Date("2026-03-20T15:00:00Z"), ny)[0];
+  assert.equal(spring.end.getTime() - spring.start.getTime(), 23 * 3_600_000);
 });

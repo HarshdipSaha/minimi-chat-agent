@@ -1,5 +1,5 @@
 import type { Store, Turn } from "./store.ts";
-import { formatLocal, localDate, resolveDateRefs } from "./time.ts";
+import { formatLocal, localDate, resolveDateRefs, weekEarlier, type DateRef } from "./time.ts";
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
@@ -45,17 +45,47 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
   ];
 
   for (const ref of resolveDateRefs(text, now, tz)) {
-    const turns = store.between(ref.start, ref.end).slice(-6);
-    for (const t of turns) {
-      const d = localDate(new Date(t.at), tz);
-      pastDates.add(d);
-      if (t.searches.length) {
-        recheckTurns.push(t);
-        if (recheckSince === null || d < recheckSince) recheckSince = d;
+    const window = (r: DateRef) => store.between(r.start, r.end).slice(-6);
+    let days: { ref: DateRef; turns: Turn[] }[] = [{ ref, turns: window(ref) }];
+    let note: string | null = null;
+
+    // "last Tuesday" can mean the most recent Tuesday or the one a week before. Let the record settle it.
+    if (ref.weekday) {
+      const older = weekEarlier(ref, tz);
+      const olderTurns = window(older);
+      const recentTurns = days[0].turns;
+      if (olderTurns.length) {
+        const related = new Set(store.search(text, 8).map((t) => t.id));
+        const recentFits = recentTurns.some((t) => related.has(t.id));
+        const olderFits = olderTurns.some((t) => related.has(t.id));
+        const said = `"${ref.text}"`;
+        if (!recentTurns.length) {
+          days = [{ ref: older, turns: olderTurns }];
+          note = `${said} most likely means ${ref.label}, but nothing was recorded that day. The same weekday a week earlier (${older.label}) has turns, so those are shown. Say so in your answer.`;
+        } else if (olderFits && !recentFits) {
+          days = [{ ref: older, turns: olderTurns }];
+          note = `${said} could mean ${ref.label} or ${older.label}. Only ${older.label} has turns about this topic, so those are shown. Say which day you used.`;
+        } else if (!(recentFits && !olderFits)) {
+          days = [{ ref: older, turns: olderTurns }, { ref, turns: recentTurns }];
+          note = `${said} could mean ${older.label} or ${ref.label}, and both have turns; both are shown. If the user's topic does not settle it, say which day you used or ask.`;
+        }
       }
     }
-    lines.push(`\nuser said "${ref.text}" → ${ref.label}`);
-    lines.push(turns.length ? turns.map((t) => summarizeTurn(t, tz)).join("\n") : `  no turns recorded on ${ref.label}.`);
+
+    lines.push(`\nuser said "${ref.text}" → ${days.map((x) => x.ref.label).join(" and ")}`);
+    if (note) lines.push(`  note: ${note}`);
+    for (const { ref: r, turns } of days) {
+      for (const t of turns) {
+        const d = localDate(new Date(t.at), tz);
+        pastDates.add(d);
+        if (t.searches.length) {
+          recheckTurns.push(t);
+          if (recheckSince === null || d < recheckSince) recheckSince = d;
+        }
+      }
+      if (days.length > 1) lines.push(`  ${r.label}:`);
+      lines.push(turns.length ? turns.map((t) => summarizeTurn(t, tz)).join("\n") : `  no turns recorded on ${r.label}.`);
+    }
   }
 
   const related = store.search(text, 3).filter((t) => !inHistory.has(t.id));

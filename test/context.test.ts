@@ -60,3 +60,45 @@ test("the tool follows Exa's guidance: every search has a query and a required o
   assert.match(WEB_SEARCH_TOOL.function.description, /Search the live web/);
   assert.match(SYSTEM_PROMPT, /objective/);
 });
+
+const answered = (at: string, userText: string, extra: Partial<NewTurn> = {}) =>
+  t(at, userText, { searches: [{ query: "q", since: null, ms: 1, results: [] }], ...extra });
+
+test("'last Tuesday' with nothing recorded that day falls back to the Tuesday a week earlier, and says so", () => {
+  const s = new Store(":memory:");
+  s.insert(answered("2026-11-03T05:00:00.000Z", "Postgres hosting prices?"));
+  const { block, recheckSince } = buildContext("Last Tuesday I asked about Postgres hosting. Changed?", NOW, s, IST, 0);
+  assert.match(block, /user said "Last Tuesday" → 2026-11-03/);
+  assert.match(block, /note: .*most likely means 2026-11-10, but nothing was recorded that day.*2026-11-03/);
+  assert.match(block, /#1 Tue.*3 Nov 2026/);
+  assert.equal(recheckSince, "2026-11-03");
+});
+
+test("both Tuesdays have turns: the one that matches the topic wins, and the choice is stated", () => {
+  const s = new Store(":memory:");
+  s.insert(answered("2026-11-03T05:00:00.000Z", "Postgres hosting prices?"));
+  s.insert(answered("2026-11-10T05:00:00.000Z", "Best pizza dough recipe?", { answerText: "Use 00 flour." }));
+  const { block, recheckTurns } = buildContext("Last Tuesday I asked about Postgres hosting. Changed?", NOW, s, IST, 0);
+  assert.match(block, /user said "Last Tuesday" → 2026-11-03\n/);
+  assert.match(block, /Only 2026-11-03 has turns about this topic/);
+  assert.doesNotMatch(block, /pizza/);
+  assert.deepEqual(recheckTurns.map((x) => x.id), [1]);
+});
+
+test("both Tuesdays have turns and the topic cannot settle it: both are shown with a note", () => {
+  const s = new Store(":memory:");
+  s.insert(answered("2026-11-03T05:00:00.000Z", "Postgres hosting prices?"));
+  s.insert(answered("2026-11-10T05:00:00.000Z", "Best pizza dough recipe?"));
+  const { block } = buildContext("What did I ask you last Tuesday?", NOW, s, IST, 0);
+  assert.match(block, /→ 2026-11-03 and 2026-11-10/);
+  assert.match(block, /both have turns; both are shown/);
+  assert.match(block, /2026-11-03:\n#1 [\s\S]*2026-11-10:\n#2 /);
+});
+
+test("an explicit date never gets a weekday fallback", () => {
+  const s = new Store(":memory:");
+  s.insert(answered("2026-11-03T05:00:00.000Z", "Postgres hosting prices?"));
+  const { block } = buildContext("What did I ask on 10 November?", NOW, s, IST, 0);
+  assert.match(block, /no turns recorded on 2026-11-10\./);
+  assert.doesNotMatch(block, /note:/);
+});

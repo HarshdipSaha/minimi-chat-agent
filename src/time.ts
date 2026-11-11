@@ -8,6 +8,8 @@ export interface DateRef {
   label: string; // "2026-11-10" or "week of 2026-11-02"
   start: Date;
   end: Date;
+  /** True for a bare weekday ("last Tuesday", "on Monday"): it could also mean the same weekday a week earlier. */
+  weekday?: boolean;
 }
 
 /** Offset of `tz` from UTC at instant `at`, in minutes (IST = 330). */
@@ -41,9 +43,30 @@ export function formatDay(at: Date, tz: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short", year: "numeric" }).format(at);
 }
 
+/** The instant a calendar day starts in `tz`. Re-checks the offset at the guess so days next to a DST change are exact. */
 function localMidnightUtc(y: number, m: number, d: number, tz: string): Date {
   const utcMidnight = new Date(Date.UTC(y, m - 1, d));
-  return new Date(utcMidnight.getTime() - tzOffsetMinutes(tz, utcMidnight) * 60_000);
+  const guess = new Date(utcMidnight.getTime() - tzOffsetMinutes(tz, utcMidnight) * 60_000);
+  return new Date(utcMidnight.getTime() - tzOffsetMinutes(tz, guess) * 60_000);
+}
+
+/** Calendar arithmetic on plain dates (no timezone involved). */
+function addDays(y: number, m: number, d: number, n: number): [number, number, number] {
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return [t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()];
+}
+
+/** The same weekday one week earlier, as its own whole-day window (exclusive end, so 23- and 25-hour days are exact). */
+export function weekEarlier(ref: DateRef, tz: string): DateRef {
+  const [y, m, d] = addDays(...(ref.label.split("-").map(Number) as [number, number, number]), -7);
+  const [ny, nm, nd] = addDays(y, m, d, 1);
+  return {
+    text: ref.text,
+    label: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+    start: localMidnightUtc(y, m, d, tz),
+    end: localMidnightUtc(ny, nm, nd, tz),
+    weekday: true,
+  };
 }
 
 /**
@@ -66,19 +89,22 @@ export function resolveDateRefs(text: string, now: Date, tz: string): DateRef[] 
       const back = new Date(Date.UTC(y, m - 1, d) - 7 * DAY);
       [y, m, d] = [back.getUTCFullYear(), back.getUTCMonth() + 1, back.getUTCDate()];
     }
-    let start = localMidnightUtc(y, m, d, tz);
+    const weekday = r.start.isCertain("weekday") && !r.start.isCertain("day") && !/\bweek\b/i.test(r.text);
     let days = 1;
     if (/\bweek\b/i.test(r.text)) {
       const mondayOffset = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
-      start = new Date(start.getTime() - mondayOffset * DAY);
+      [y, m, d] = addDays(y, m, d, -mondayOffset);
       days = 7;
     }
+    const start = localMidnightUtc(y, m, d, tz);
     if (start.getTime() > now.getTime()) continue; // future: nothing to recall
+    const [ey, em, ed] = addDays(y, m, d, days);
     refs.push({
       text: r.text,
       label: days === 7 ? `week of ${localDate(start, tz)}` : localDate(start, tz),
       start,
-      end: new Date(start.getTime() + days * DAY),
+      end: localMidnightUtc(ey, em, ed, tz),
+      weekday,
     });
   }
   return refs;
