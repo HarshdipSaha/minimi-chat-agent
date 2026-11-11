@@ -32,8 +32,8 @@ Optional: `npm run seed` loads three real recorded exchanges (labelled **demo se
 
 | | |
 |---|---|
-| `npm test` | 75 unit tests, no network or keys needed |
-| `npm run eval -- --runs=3` | 9 multi-day scenarios against the live APIs, repeated (uses API quota); results in `evals/results/` |
+| `npm test` | 86 unit tests, no network or keys needed |
+| `npm run eval -- --runs=3` | 11 multi-day scenarios against the live APIs, repeated (uses API quota); results in `evals/results/` |
 | `npm run typecheck` | TypeScript check |
 | `npm run seed` / `seed:record` | load / re-record the demo history |
 
