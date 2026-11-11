@@ -49,6 +49,13 @@ export const CASES: EvalCase[] = [
     { at: now, message: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?",
       expect: { match: CRMS, cites: true, minSearches: 3 } },
   ] },
+  { name: "stable-fact-not-called-changed", tz: IST, steps: (now) => [
+    { at: lastWeekday(now, 2), message: "Search the web: who created the Linux kernel, and in what year was it first released?", expect: { cites: true, minSearches: 1, match: [/Torvalds/i, /1991/] } },
+    { at: now, message: "Last Tuesday I asked you about the Linux kernel's creator and first release. Is that still correct?",
+      expect: { match: [/Torvalds/i, /(still|unchanged|no (new|change)|any change|same|remains|correct|yes)/i],
+        notMatch: [/(has|have) changed/i, /(was|were) (updated|revised)/i, /no longer/i, /\bnow (created|credited|attributed)/i],
+        minSearches: 2 } },
+  ] },
   { name: "chit-chat-no-search", tz: IST, steps: (now) => [
     { at: now, message: "thanks, that's really helpful!", expect: { maxSearches: 0 } },
   ] },

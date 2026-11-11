@@ -17,40 +17,50 @@ function check(answer: string, searches: number, cited: number, e: Expect = {}):
 }
 const p50 = (xs: number[]) => { const s = xs.filter(Number.isFinite).sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : NaN; };
 
+// usage: npm run eval -- [case-name] [--runs=3]
+const args = process.argv.slice(2);
+const runs = Number(args.find((a) => a.startsWith("--runs="))?.slice(7) ?? 1);
+const only = args.find((a) => !a.startsWith("--"));
+
 loadDotEnv();
 const config = loadConfig();
 const stream = makeGroqStream({ keys: config.groqKeys, model: config.model, reasoningEffort: config.reasoningEffort });
-const search = makeExaSearch({ apiKey: config.exaKey, type: config.exaType });
-const only = process.argv[2];
+const search = makeExaSearch({ apiKey: config.exaKey, type: config.exaType, ttlMs: 0 }); // no cache: every run hits the live web
 const now = new Date();
-const rows: { case: string; step: number; graded: boolean; pass: boolean; failures: string[]; ttftMs: number | null; totalMs: number; searches: number; answer: string }[] = [];
+interface Row { run: number; case: string; step: number; graded: boolean; pass: boolean; failures: string[]; ttftMs: number | null; totalMs: number; searches: number; answer: string }
+const rows: Row[] = [];
 
-for (const c of CASES.filter((c) => !only || c.name === only)) {
-  const store = new Store(":memory:");
-  for (const [i, step] of c.steps(now).entries()) {
-    let cited = 0;
-    const onEvent = (e: AgentEvent) => { if (e.type === "sources") cited = e.sources.length; };
-    let turn;
-    try {
-      turn = await runTurn({ text: step.message, tz: c.tz, at: step.at }, { stream, search, store, clock: { now: () => now }, config }, onEvent);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      rows.push({ case: c.name, step: i + 1, graded: !!step.expect, pass: false, failures: [`error: ${msg}`], ttftMs: null, totalMs: 0, searches: 0, answer: "" });
-      console.log(`✖ ${c.name}#${i + 1}  ERROR ${msg}`);
-      continue;
+for (let run = 1; run <= runs; run++) {
+  for (const c of CASES.filter((c) => !only || c.name === only)) {
+    const store = new Store(":memory:");
+    for (const [i, step] of c.steps(now).entries()) {
+      let cited = 0;
+      const onEvent = (e: AgentEvent) => { if (e.type === "sources") cited = e.sources.length; };
+      try {
+        const turn = await runTurn({ text: step.message, tz: c.tz, at: step.at }, { stream, search, store, clock: { now: () => now }, config }, onEvent);
+        const failures = step.expect ? check(turn.answerText, turn.searches.length, cited, step.expect) : [];
+        rows.push({ run, case: c.name, step: i + 1, graded: !!step.expect, pass: failures.length === 0, failures, ttftMs: turn.ttftMs, totalMs: turn.totalMs ?? 0, searches: turn.searches.length, answer: turn.answerText });
+        console.log(`${failures.length ? "✖" : "✔"} run${run} ${c.name}#${i + 1}  first word ${turn.ttftMs}ms  total ${turn.totalMs}ms  searches ${turn.searches.length}${failures.length ? "  → " + failures.join("; ") : ""}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        rows.push({ run, case: c.name, step: i + 1, graded: !!step.expect, pass: false, failures: [`error: ${msg}`], ttftMs: null, totalMs: 0, searches: 0, answer: "" });
+        console.log(`✖ run${run} ${c.name}#${i + 1}  ERROR ${msg}`);
+      }
     }
-    const failures = step.expect ? check(turn.answerText, turn.searches.length, cited, step.expect) : [];
-    rows.push({ case: c.name, step: i + 1, graded: !!step.expect, pass: failures.length === 0, failures, ttftMs: turn.ttftMs, totalMs: turn.totalMs ?? 0, searches: turn.searches.length, answer: turn.answerText });
-    console.log(`${failures.length ? "✖" : "✔"} ${c.name}#${i + 1}  first word ${turn.ttftMs}ms  total ${turn.totalMs}ms  searches ${turn.searches.length}${failures.length ? "  → " + failures.join("; ") : ""}`);
   }
 }
 
 const graded = rows.filter((r) => r.graded);
-const noSearch = rows.filter((r) => r.searches === 0 && !r.failures.some((f) => f.startsWith("error")));
-const withSearch = rows.filter((r) => r.searches > 0);
+const clean = rows.filter((r) => !r.failures.some((f) => f.startsWith("error")));
+const noSearch = clean.filter((r) => r.searches === 0), withSearch = clean.filter((r) => r.searches > 0);
+const perCase: Record<string, string> = {};
+for (const name of [...new Set(graded.map((r) => r.case))]) {
+  const g = graded.filter((r) => r.case === name);
+  perCase[name] = `${g.filter((r) => r.pass).length}/${g.length}`;
+}
 const summary = {
-  model: config.model, reasoningEffort: config.reasoningEffort, exaType: config.exaType, ranAt: now.toISOString(),
-  passed: graded.filter((r) => r.pass).length, graded: graded.length,
+  model: config.model, reasoningEffort: config.reasoningEffort, exaType: config.exaType, ranAt: now.toISOString(), runs,
+  passed: graded.filter((r) => r.pass).length, graded: graded.length, perCase,
   p50FirstWordNoSearchMs: p50(noSearch.map((r) => r.ttftMs ?? NaN)), p50TotalNoSearchMs: p50(noSearch.map((r) => r.totalMs)),
   p50FirstWordWithSearchMs: p50(withSearch.map((r) => r.ttftMs ?? NaN)), p50TotalWithSearchMs: p50(withSearch.map((r) => r.totalMs)),
 };

@@ -152,6 +152,21 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
     emit({ type: "text", text: answer });
   }
 
+  // Search results were used but nothing is cited: say which pages were checked instead of leaving claims unsourced.
+  if (sources.length && answer.trim() && !sources.some((s) => answer.includes(`[${s.n}]`))) {
+    // The top result of each search, current-page searches first. Numbers follow the order results were numbered in.
+    const tops: { n: number; current: boolean }[] = [];
+    let next = 1;
+    for (const rec of searches) {
+      if (rec.results.length) tops.push({ n: next, current: !rec.since });
+      next += rec.results.length;
+    }
+    tops.sort((a, b) => Number(b.current) - Number(a.current));
+    const line = `\n\nSources checked: ${tops.slice(0, 3).map((t) => `[${t.n}]`).join(" ")}.`;
+    answer += line;
+    emit({ type: "text", text: line });
+  }
+
   // Answers that rest on web results always say when they were true: added here, not left to the model.
   if (searches.length && answer.trim() && !/\bas of\b/i.test(answer)) {
     const line = `\n\nAs of ${formatDay(now, input.tz)}.`;

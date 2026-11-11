@@ -233,3 +233,15 @@ test("recheck adds a figure check comparing the earlier answer's figures with cu
   assert.match(tool, /- \$19: found in current pages \[1\]/);
   assert.match(tool, /- \$69: NOT found/);
 });
+
+test("answers that used search but cite nothing get a 'Sources checked' line (current pages first)", async () => {
+  const m = fakeModel([
+    { calls: [{ id: "a", searches: [{ query: "alpha one" }, { query: "beta two" }] }] },
+    { text: "Everything is unchanged." },
+  ]);
+  const events: AgentEvent[] = [];
+  const turn = await runTurn({ text: "x", tz: "UTC" }, deps(m.stream, fakeSearch().fn), (e) => events.push(e));
+  assert.equal(turn.answerText, "Everything is unchanged.\n\nSources checked: [1] [6].\n\nAs of 11 Nov 2026.");
+  const sources = events.find((e) => e.type === "sources") as Extract<AgentEvent, { type: "sources" }>;
+  assert.deepEqual(sources.sources.map((s) => s.n), [1, 6]);
+});
