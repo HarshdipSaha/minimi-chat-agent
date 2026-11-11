@@ -216,3 +216,20 @@ test("answers that used search get an 'As of <date>' line added by code when the
   const m3 = fakeModel([{ text: "Hi!" }]);
   assert.equal((await runTurn({ text: "hi", tz: "UTC" }, deps(m3.stream, fakeSearch().fn), () => {})).answerText, "Hi!");
 });
+
+test("recheck adds a figure check comparing the earlier answer's figures with current pages", async () => {
+  const store = new Store(":memory:");
+  const seedModel = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing" }] }] }, { text: "Neon Launch is $19 and Scale is $69 [1]." }]);
+  await runTurn({ text: "neon pricing?", tz: "UTC", at: new Date("2026-11-03T05:00:00Z") }, deps(seedModel.stream, fakeSearch().fn, store), () => {});
+
+  const m = fakeModel([{ calls: [{ id: "a", searches: [{ query: "neon pricing now" }] }] }, { text: "ok" }]);
+  const search: SearchFn = async (args) => ({
+    query: args.query, objective: null, since: args.since ?? null, ms: 1,
+    results: args.since ? [] : [{ url: "https://neon.tech/pricing", title: "Neon pricing", publishedDate: null, highlights: ["Launch plan $19.00 per month"] }],
+  });
+  await runTurn({ text: "What did I ask on 3 November? Still correct?", tz: "UTC" }, deps(m.stream, search, store), () => {});
+  const tool = (m.calls[1].messages.filter((x) => x.role === "tool") as { content: string }[])[0].content;
+  assert.match(tool, /## figure check: figures from your answer on 2026-11-03/);
+  assert.match(tool, /- \$19: found in current pages \[1\]/);
+  assert.match(tool, /- \$69: NOT found/);
+});

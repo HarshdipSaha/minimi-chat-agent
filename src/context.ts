@@ -27,6 +27,8 @@ export interface TurnContext {
    * the pages published since that date are searched, instead of trusting the model to remember to.
    */
   recheckSince: string | null;
+  /** The past turns (with web searches) the user pointed at: what a recheck compares against. */
+  recheckTurns: Turn[];
 }
 
 /** Everything the model needs to know about time and memory for this turn, assembled in code. */
@@ -36,6 +38,7 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
   const first = store.first();
   const pastDates = new Set(history.map((t) => localDate(new Date(t.at), tz)));
   let recheckSince: string | null = null;
+  const recheckTurns: Turn[] = [];
   const lines = [
     `now: ${formatLocal(now, tz)} (${tz})`,
     `memory_starts: ${first ? formatLocal(new Date(first.at), tz) : "no earlier conversations recorded; this is the first one"}`,
@@ -46,7 +49,10 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
     for (const t of turns) {
       const d = localDate(new Date(t.at), tz);
       pastDates.add(d);
-      if (t.searches.length && (recheckSince === null || d < recheckSince)) recheckSince = d;
+      if (t.searches.length) {
+        recheckTurns.push(t);
+        if (recheckSince === null || d < recheckSince) recheckSince = d;
+      }
     }
     lines.push(`\nuser said "${ref.text}" → ${ref.label}`);
     lines.push(turns.length ? turns.map((t) => summarizeTurn(t, tz)).join("\n") : `  no turns recorded on ${ref.label}.`);
@@ -58,5 +64,5 @@ export function buildContext(text: string, now: Date, store: Store, tz: string, 
     lines.push(`\nrelated earlier turns (keyword match):\n${related.map((t) => summarizeTurn(t, tz)).join("\n")}`);
   }
 
-  return { block: `<context>\n${lines.join("\n")}\n</context>`, history, pastDates: [...pastDates].sort(), recheckSince };
+  return { block: `<context>\n${lines.join("\n")}\n</context>`, history, pastDates: [...pastDates].sort(), recheckSince, recheckTurns };
 }

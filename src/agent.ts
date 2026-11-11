@@ -3,6 +3,7 @@ import type { Clock } from "./clock.ts";
 import { buildContext } from "./context.ts";
 import type { ChatMessage, StreamFn } from "./llm.ts";
 import { SYSTEM_PROMPT } from "./prompt.ts";
+import { checkFigures, extractFigures, formatFigureCheck } from "./figures.ts";
 import { formatForModel, type SearchFn } from "./search.ts";
 import type { SearchRecord, Store, Turn } from "./store.ts";
 import { formatDay, formatLocal } from "./time.ts";
@@ -61,7 +62,7 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
   const t0 = performance.now();
   let ttftMs: number | null = null;
 
-  const { block, history, pastDates, recheckSince } = buildContext(input.text, now, deps.store, input.tz);
+  const { block, history, pastDates, recheckSince, recheckTurns } = buildContext(input.text, now, deps.store, input.tz);
   const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
   for (const h of history) {
     messages.push({ role: "user", content: `[${formatLocal(new Date(h.at), input.tz)}] ${h.userText}` });
@@ -114,8 +115,10 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
     const numResults = all.length > 3 ? 3 : 5; // keep the per-request token total under the free-tier limit
     const records = await Promise.all(all.map((q) =>
       deps.search({ query: q.query, objective: q.objective, since: q.since, numResults })));
+    const currentPages: { n: number; text: string }[] = [];
     const section = (rec: SearchRecord): string => {
       const firstIndex = sources.length + 1;
+      if (!rec.since) rec.results.forEach((r, k) => currentPages.push({ n: firstIndex + k, text: `${r.title} ${r.highlights.join(" ")}` }));
       rec.results.forEach((r, k) => sources.push({ n: firstIndex + k, url: r.url, title: r.title, publishedDate: r.publishedDate }));
       searches.push(rec);
       const scope = rec.since ? `pages published since ${rec.since}` : "current pages";
@@ -131,7 +134,15 @@ export async function runTurn(input: TurnInput, deps: AgentDeps, emit: (e: Agent
       }
       answered.push({ tc, parts: args.data.searches.map(() => section(records[next++])) });
     }
-    if (answered.length) answered[answered.length - 1].parts.push(...twins.map(() => section(records[next++])));
+    if (answered.length) {
+      const last = answered[answered.length - 1].parts;
+      last.push(...twins.map(() => section(records[next++])));
+      // Recheck: compare the figures the earlier answer stated with what the current pages say.
+      const figures = extractFigures(recheckTurns.map((t) => t.answerText).join(" ")).slice(0, 12);
+      if (recheckTurns.length && figures.length) {
+        last.push(formatFigureCheck(checkFigures(figures, currentPages), recheckSince ?? "an earlier date"));
+      }
+    }
     for (const { tc, parts } of answered) messages.push({ role: "tool", tool_call_id: tc.id, content: parts.join("\n\n") });
     if (answer && !answer.endsWith("\n")) needsBreak = true;
   }
